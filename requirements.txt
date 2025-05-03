@@ -31,7 +31,6 @@ GitPython==3.1.43
 h11==0.14.0
 html-table-parser-python3==0.3.1
 html5lib==1.1
-html_table_parser==0.1.0
 idna==3.10
 imageio==2.35.1
 importlib_resources==6.4.5
