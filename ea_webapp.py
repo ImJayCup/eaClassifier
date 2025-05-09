@@ -33,6 +33,25 @@ import pandas as pd
 
 import joblib
 
+import streamlit as st
+import numpy as np
+import sklearn
+import statmorph
+import photutils
+import lmfit
+import astropy
+import astroquery
+
+st.sidebar.title("🔧 Environment Info")
+st.sidebar.write("numpy      :", np.__version__)
+st.sidebar.write("scikit-learn:", sklearn.__version__, "@", sklearn.__file__)
+st.sidebar.write("statmorph  :", statmorph.__version__, "@", statmorph.__file__)
+st.sidebar.write("photutils  :", photutils.__version__, "@", photutils.__file__)
+st.sidebar.write("lmfit      :", lmfit.__version__, "@", lmfit.__file__)
+st.sidebar.write("astropy    :", astropy.__version__, "@", astropy.__file__)
+st.sidebar.write("astroquery :", astroquery.__version__, "@", astroquery.__file__)
+
+
 rf_model = joblib.load('rf_model.pkl')
 scaler = joblib.load('scaler.pkl')
 
