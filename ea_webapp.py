@@ -221,6 +221,15 @@ def eaProbability(
             spectro=False
         )
 
+        # DEBUG: Log SDSS query result
+        try:
+            with open("sdss_debug_log.txt", "a") as f:
+                f.write(f"RA={ra:.5f}, Dec={dec:.5f}\n")
+                f.write(f"SDSS query returned: {results}\n\n")
+        except Exception as e:
+            print(f"Failed to write debug log: {e}")
+
+
         if results is None or len(results) == 0:
             return "No SDSS photometric object found near this position"
 
