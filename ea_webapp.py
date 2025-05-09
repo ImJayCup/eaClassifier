@@ -31,81 +31,11 @@ import astropy.units as u
 import pandas as pd
 
 
-# Load the pickled data
-with open('galaxy_data.pkl', 'rb') as f:
-    data = pickle.load(f)
+import joblib
 
-# Unpack the variables
-goto_morph   = data['goto_morph']
-goto_mags    = data['goto_mags']
-rand_morph   = data['rand_morph']
-rand_mags    = data['rand_mags']
-rand_morph2  = data['rand_morph2']
-rand_mags2   = data['rand_mags2']
+rf_model = joblib.load('rf_model.pkl')
+scaler = joblib.load('scaler.pkl')
 
-# -------------------------------
-# 1. Convert to NumPy arrays
-# -------------------------------
-goto_morph = [np.array(x) for x in goto_morph]
-goto_mags  = [np.array(x) for x in goto_mags]
-
-rand_morph = [np.array(x) for x in rand_morph]
-rand_mags  = [np.array(x) for x in rand_mags]
-
-# -------------------------------
-# 2. Construct color features
-# -------------------------------
-def make_color_features(mags):
-    u, g, r, i, z = mags
-    return np.column_stack([
-        u - g,
-        g - r,
-        r - i,
-        i - z,
-        u - r
-    ])
-
-X_color_goto = make_color_features(goto_mags)
-X_color_rand = make_color_features(rand_mags)
-
-# -------------------------------
-# 3. Combine morphology + color
-# -------------------------------
-X_goto = np.hstack([np.column_stack(goto_morph), X_color_goto])
-X_rand = np.hstack([np.column_stack(rand_morph), X_color_rand])
-
-X = np.vstack([X_goto, X_rand])
-y = np.hstack([np.ones(len(X_goto)), np.zeros(len(X_rand))])
-
-# -------------------------------
-# 4. Train/test split (80/20)
-# -------------------------------
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-# -------------------------------
-# 5. Scale features
-# -------------------------------
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled  = scaler.transform(X_test)
-
-# -------------------------------
-# 6. Train Random Forest
-# -------------------------------
-rf_model = RandomForestClassifier(n_estimators=300, random_state=42)
-rf_model.fit(X_train_scaled, y_train)
-
-# -------------------------------
-# 7. Evaluate
-# -------------------------------
-y_pred = rf_model.predict(X_test_scaled)
-probs = rf_model.predict_proba(X_test_scaled)[:, 1]
-
-print("Classification Report:\n", classification_report(y_test, y_pred))
-print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred))
-print(f"AUC: {roc_auc_score(y_test, probs):.3f}")
 
 def compute_x_y_target(ra_target, dec_target, ra_ref, dec_ref, x_ref, y_ref, 
                         ra_per_col, ra_per_row, dec_per_col, dec_per_row):
@@ -129,41 +59,30 @@ def compute_x_y_target(ra_target, dec_target, ra_ref, dec_ref, x_ref, y_ref,
 
 
 def remove_distant_pixels(image_data, x_target, y_target, max_distance=100):
-    # Get the indices of all pixels in the image
     height, width = image_data.shape[:2]
     y_indices, x_indices = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
-    
-    # Calculate squared distance to avoid sqrt calculation
     dist_sq = (x_indices - x_target) ** 2 + (y_indices - y_target) ** 2
-    
-    # Create a mask where squared distance is within the max_distance squared
     mask = dist_sq <= max_distance ** 2
-    
-    # Get the coordinates of the unmasked pixels
+
     y_unmasked, x_unmasked = np.where(mask)
-    
-    # Determine the bounding box of the unmasked pixels
+
+    if len(x_unmasked) == 0 or len(y_unmasked) == 0:
+        raise ValueError("No unmasked pixels found within trimming radius.")
+
     min_x, max_x = x_unmasked.min(), x_unmasked.max()
     min_y, max_y = y_unmasked.min(), y_unmasked.max()
-    
-    # Crop the image based on the bounding box
+
     cropped_image = image_data[min_y:max_y+1, min_x:max_x+1]
-    
-    # Reshape the cropped image to a 200x200 array (pad if necessary)
+
     new_shape = (200, 200)
     reshaped_image = np.zeros(new_shape, dtype=image_data.dtype)
-    
-    # Get the dimensions of the cropped image
     crop_height, crop_width = cropped_image.shape
-    
-    # Calculate the padding to center the cropped image into the new 200x200 array
     pad_y = (new_shape[0] - crop_height) // 2
     pad_x = (new_shape[1] - crop_width) // 2
-    
-    # Place the cropped image into the reshaped 200x200 array
     reshaped_image[pad_y:pad_y+crop_height, pad_x:pad_x+crop_width] = cropped_image
-    
+
     return reshaped_image
+
 
 def magnitude_to_flux(mag, zero_point=25.0):
     """Convert magnitude to flux assuming a zero-point magnitude."""
@@ -203,6 +122,8 @@ def get_morph(ra, dec):
         images = SDSS.get_images(coordinates=pos, band='r')
         header = images[0][0].header
         image_data = images[0][0].data
+
+
 
         # Reference pixel info from header
         x_ref = header['CRPIX1']
@@ -277,94 +198,97 @@ def eaProbability(
     return_numpy=False
 ):
     """
-    Rank new galaxies by E+A probability and optionally save to CSV or return as NumPy array.
-
-    Parameters:
-    - morph_batch: list of 7 arrays (Conc, Asym, Gini, M20, Smooth, Ellip, Sersic_n)
-    - mag_batch:   list of 5 arrays (u, g, r, i, z)
-    - scaler:      fitted StandardScaler
-    - model:       trained RandomForestClassifier
-    - output_csv:  optional string, filename to save ranked results (default: None)
-    - ra_list:     optional list/array of RA values
-    - dec_list:    optional list/array of Dec values
-    - return_numpy: if True, return as NumPy array instead of DataFrame
-
-    Returns:
-    - DataFrame or NumPy array, sorted by E+A probability (descending)
+    Predict E+A probability for a galaxy using morphology + ugriz mags from SDSS.
     """
     from astroquery.sdss import SDSS
     from astropy.coordinates import SkyCoord
     import astropy.units as u
-    # Input RA/DEC
-    ra = 116.5535
-    dec = 26.9230
+
+    # Build SkyCoord
     target_coord = SkyCoord(ra=ra*u.deg, dec=dec*u.deg, frame='icrs')
 
+    try:
+        # Query SDSS photometry within 2 arcsec
+        results = SDSS.query_region(
+            target_coord,
+            radius=2*u.arcsec,
+            photoobj_fields=[
+                'ra', 'dec',
+                'modelMag_u', 'modelMag_g', 'modelMag_r',
+                'modelMag_i', 'modelMag_z',
+                'type'
+            ],
+            spectro=False
+        )
 
-    # Query SDSS PhotoObj within 2 arcsec
-    results = SDSS.query_region(target_coord,
-                                radius=2*u.arcsec,
-                                photoobj_fields=['ra', 'dec', 'u', 'g', 'r', 'i', 'z', 'type'],
-                                spectro=False)
+        if results is None or len(results) == 0:
+            return "No SDSS photometric object found near this position"
 
-    # Filter to galaxies only (type = 3)
-    galaxies = results[results['type'] == 3]
+        # Filter to galaxies (type = 3)
+        galaxies = results[results['type'] == 3]
+        if len(galaxies) == 0:
+            return "No SDSS galaxy found (type=3) within 2 arcsec"
 
-    if len(galaxies) > 0:
-        # Find the closest galaxy
+        # Find closest galaxy
         coords = SkyCoord(ra=galaxies['ra']*u.deg, dec=galaxies['dec']*u.deg)
         separations = target_coord.separation(coords)
         idx_closest = separations.argmin()
 
+        # Get ugriz model magnitudes
         mag_batch = [
-                galaxies['u'][idx_closest],
-                galaxies['g'][idx_closest],
-                galaxies['r'][idx_closest],
-                galaxies['i'][idx_closest],
-                galaxies['z'][idx_closest]
-            ]
+            galaxies['modelMag_u'][idx_closest],
+            galaxies['modelMag_g'][idx_closest],
+            galaxies['modelMag_r'][idx_closest],
+            galaxies['modelMag_i'][idx_closest],
+            galaxies['modelMag_z'][idx_closest]
+        ]
 
-    
-    morph_batch = [morph.concentration, morph.asymmetry, morph.gini, morph.m20, morph.smoothness, morph.ellipticity_centroid, morph.sersic_n]
-    scaler = scaler
-    model = rf_model
+    except Exception as e:
+        return f"SDSS query error: {e}"
 
-    # Construct feature matrix
-    X_morph = np.column_stack(morph_batch)
-    u, g, r, i, z = mag_batch
-    X_color = np.column_stack([
-        u - g,
-        g - r,
-        r - i,
-        i - z,
-        u - r
-    ])
-    X_all = np.hstack([X_morph, X_color])
-    X_scaled = scaler.transform(X_all)
+    try:
+        # Morphology vector
+        morph_batch = [
+            morph.concentration,
+            morph.asymmetry,
+            morph.gini,
+            morph.m20,
+            morph.smoothness,
+            morph.ellipticity_centroid,
+            morph.sersic_n
+        ]
 
-    # Predict probabilities
-    probs = model.predict_proba(X_scaled)[:, 1]
+        # Construct full feature vector
+        X_morph = np.array(morph_batch).reshape(1, -1)
+        u, g, r, i, z = mag_batch
+        X_color = np.array([[u - g, g - r, r - i, i - z, u - r]])
+        X_all = np.hstack([X_morph, X_color])
 
-    # Build DataFrame
-    df = pd.DataFrame(X_all, columns=[
-        'Conc', 'Asym', 'Gini', 'M20', 'Smooth', 'Ellip', 'Sersic_n',
-        'u-g', 'g-r', 'r-i', 'i-z', 'u-r'
-    ])
-    df['prob_E+A'] = probs
+        # Scale and predict
+        X_scaled = scaler.transform(X_all)
+        probs = rf_model.predict_proba(X_scaled)[:, 1]
 
-    if ra_list is not None and dec_list is not None:
-        df['RA'] = np.array(ra_list)
-        df['Dec'] = np.array(dec_list)
+        # Build result DataFrame
+        df = pd.DataFrame(X_all, columns=[
+            'Conc', 'Asym', 'Gini', 'M20', 'Smooth', 'Ellip', 'Sersic_n',
+            'u-g', 'g-r', 'r-i', 'i-z', 'u-r'
+        ])
+        df['prob_E+A'] = probs
 
-    df_sorted = df.sort_values('prob_E+A', ascending=False)
+        if ra_list is not None and dec_list is not None:
+            df['RA'] = np.array(ra_list)
+            df['Dec'] = np.array(dec_list)
 
-    # Save to CSV if requested
-    if output_csv:
-        df_sorted.to_csv(output_csv, index=False)
-        print(f"Saved ranked candidates to: {output_csv}")
+        df_sorted = df.sort_values('prob_E+A', ascending=False)
 
-    return df_sorted.to_numpy() if return_numpy else df_sorted
+        if output_csv:
+            df_sorted.to_csv(output_csv, index=False)
+            print(f"Saved ranked candidates to: {output_csv}")
 
+        return df_sorted.to_numpy() if return_numpy else df_sorted
+
+    except Exception as e:
+        return f"Prediction error: {e}"
 
 
 
@@ -393,5 +317,6 @@ if st.button("Analyze Galaxy"):
             # Display morphology figure
             fig = make_figure(morph)
             st.pyplot(fig)
+
     except Exception as e:
         st.error(f"An error occurred: {e}")
