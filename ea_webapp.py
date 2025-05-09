@@ -176,10 +176,6 @@ def get_morph(ra, dec):
         image_data = np.nan_to_num(image_data, nan=0.0, posinf=0.0, neginf=0.0)
         psf = np.nan_to_num(psf, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Optional: rotate for consistent orientation
-        # image_data = np.rot90(image_data, k=3)
-        # psf = np.rot90(psf, k=3)
-
         # Threshold and segment
         threshold = detect_threshold(image_data, nsigma=3)
         convolved_image = convolve(image_data, psf)
@@ -198,6 +194,11 @@ def get_morph(ra, dec):
         if not camcol or camcol < 1 or camcol > 6:
             return "Invalid or missing CAMCOL"
         gain = gain_map[camcol - 1]
+
+        st.sidebar.write("Image min/max:", np.nanmin(image_data), "/", np.nanmax(image_data))
+        st.sidebar.write("Image contains NaNs:", np.isnan(image_data).any())
+        st.sidebar.write("Image contains Infs:", np.isinf(image_data).any())
+        st.sidebar.write("Num zero pixels:", np.sum(image_data == 0))
 
         # Run statmorph
         morph_list = statmorph.source_morphology(
