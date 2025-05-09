@@ -2,7 +2,7 @@ streamlit==1.29.0
 matplotlib==3.7.1
 statmorph==0.6.0
 numpy==1.24.4
-scikit-learn==1.2.2
+scikit-learn>=1.4.0
 pickle5==0.0.11
 astropy==5.2.2
 photutils==1.8.0
