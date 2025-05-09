@@ -123,8 +123,6 @@ def get_morph(ra, dec):
         header = images[0][0].header
         image_data = images[0][0].data
 
-
-
         # Reference pixel info from header
         x_ref = header['CRPIX1']
         y_ref = header['CRPIX2']
@@ -154,13 +152,20 @@ def get_morph(ra, dec):
         # Create synthetic PSF
         psf = create_gaussian_psf(size=25, fwhm=3, magnitude=18.5)
 
-        # Ensure float format for convolution
+        # Convert image to float and clean non-finite values
         image_data = image_data.astype('float64')
+        image_data = np.nan_to_num(image_data, nan=0.0, posinf=0.0, neginf=0.0)
+        psf = np.nan_to_num(psf, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Optional: rotate for consistent orientation
+        # image_data = np.rot90(image_data, k=3)
+        # psf = np.rot90(psf, k=3)
+
+        # Threshold and segment
         threshold = detect_threshold(image_data, nsigma=3)
         convolved_image = convolve(image_data, psf)
-
-        # Detect sources and create segmentation map
         segmap = detect_sources(convolved_image, threshold, npixels=4)
+
         if not segmap.segments:
             return "No sources detected"
 
@@ -168,12 +173,16 @@ def get_morph(ra, dec):
         object_sizes = [seg.data.size for seg in segmap.segments]
         largest_index = int(np.argmax(object_sizes))
 
-        # Infer gain from filename
+        # Infer gain from CAMCOL header
         gain_map = [4.71, 4.6, 4.72, 4.76, 4.725, 4.895]
+        camcol = header.get('CAMCOL', None)
+        if not camcol or camcol < 1 or camcol > 6:
+            return "Invalid or missing CAMCOL"
+        gain = gain_map[camcol - 1]
 
         # Run statmorph
         morph_list = statmorph.source_morphology(
-            image_data, segmap, gain=gain_map[header['CAMCOL']-1], psf=psf
+            image_data, segmap, gain=gain, psf=psf
         )
 
         target_morph = morph_list[largest_index]
@@ -186,6 +195,7 @@ def get_morph(ra, dec):
         return f"Object Not Found"
     except Exception as e:
         return f"Error processing: {e}"
+
     
 
 def eaProbability(
