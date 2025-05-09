@@ -137,12 +137,12 @@ def get_morph(ra, dec):
     try:
         pos = coords.SkyCoord(ra=ra, dec=dec, unit="deg", frame="icrs")
 
-        # Get r-band science image (corrected frame)
+        # Get r-band science image
         images = SDSS.get_images(coordinates=pos, band='r')
         header = images[0][0].header
         image_data = images[0][0].data
 
-        # Reference pixel info from header
+        # Extract WCS info
         x_ref = header['CRPIX1']
         y_ref = header['CRPIX2']
         ra_ref = header['CRVAL1']
@@ -152,7 +152,7 @@ def get_morph(ra, dec):
         dec_per_col = header['CD2_1']
         dec_per_row = header['CD2_2']
 
-        # Convert RA/DEC to pixel coordinates
+        # Convert target RA/Dec to pixel coordinates
         x_target, y_target = compute_x_y_target(
             ra_target=ra, dec_target=dec,
             ra_ref=ra_ref, dec_ref=dec_ref,
@@ -161,48 +161,45 @@ def get_morph(ra, dec):
             dec_per_col=dec_per_col, dec_per_row=dec_per_row
         )
 
-        # Trim image around target galaxy
-        image_data = remove_distant_pixels(
-            image_data=image_data,
-            x_target=x_target,
-            y_target=y_target
-        )
-
-        # Create synthetic PSF
-        psf = create_gaussian_psf(size=25, fwhm=3, magnitude=18.5)
-
-        # Convert image to float and clean non-finite values
+        # Trim and sanitize image
+        image_data = remove_distant_pixels(image_data, x_target, y_target)
         image_data = image_data.astype('float64')
         image_data = np.nan_to_num(image_data, nan=0.0, posinf=0.0, neginf=0.0)
+        image_data = np.clip(image_data, 0, np.percentile(image_data, 99.9))
+
+        # Create PSF and clean it
+        psf = create_gaussian_psf(size=25, fwhm=3, magnitude=18.5)
         psf = np.nan_to_num(psf, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Threshold and segment
+        # Detect threshold and segment
         threshold = detect_threshold(image_data, nsigma=3)
         convolved_image = convolve(image_data, psf)
         segmap = detect_sources(convolved_image, threshold, npixels=4)
 
-        if not segmap.segments:
-            return "No sources detected"
+        # Filter out small segments
+        min_pixels = 20
+        segmap.segments = [seg for seg in segmap.segments if seg.data.sum() >= min_pixels]
 
-        # Select largest object by size
+        if not segmap.segments:
+            return "No usable segments after filtering small ones"
+
+        # Choose largest segment
         object_sizes = [seg.data.size for seg in segmap.segments]
         largest_index = int(np.argmax(object_sizes))
 
         # Infer gain from CAMCOL header
         gain_map = [4.71, 4.6, 4.72, 4.76, 4.725, 4.895]
         camcol = header.get('CAMCOL', None)
-        if not camcol or camcol < 1 or camcol > 6:
+        if not camcol or not (1 <= camcol <= 6):
             return "Invalid or missing CAMCOL"
         gain = gain_map[camcol - 1]
 
-        st.sidebar.write("Image min/max:", np.nanmin(image_data), "/", np.nanmax(image_data))
-        st.sidebar.write("Image contains NaNs:", np.isnan(image_data).any())
-        st.sidebar.write("Image contains Infs:", np.isinf(image_data).any())
-        st.sidebar.write("Num zero pixels:", np.sum(image_data == 0))
+        # Build mask to suppress blank background pixels
+        mask = (image_data == 0.0)
 
-        # Run statmorph
+        # Run statmorph with mask
         morph_list = statmorph.source_morphology(
-            image_data, segmap, gain=gain, psf=psf
+            image_data, segmap, gain=gain, psf=psf, mask=mask
         )
 
         target_morph = morph_list[largest_index]
@@ -215,6 +212,7 @@ def get_morph(ra, dec):
         return f"Object Not Found"
     except Exception as e:
         return f"Error processing: {e}"
+
 
     
 
