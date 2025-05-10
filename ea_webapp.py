@@ -33,25 +33,6 @@ import pandas as pd
 
 import joblib
 
-import streamlit as st
-import numpy as np
-import sklearn
-import statmorph
-import photutils
-import lmfit
-import astropy
-import astroquery
-
-st.sidebar.title("🔧 Environment Info")
-st.sidebar.write("numpy      :", np.__version__)
-st.sidebar.write("scikit-learn:", sklearn.__version__, "@", sklearn.__file__)
-st.sidebar.write("statmorph  :", statmorph.__version__, "@", statmorph.__file__)
-st.sidebar.write("photutils  :", photutils.__version__, "@", photutils.__file__)
-st.sidebar.write("lmfit      :", lmfit.__version__, "@", lmfit.__file__)
-st.sidebar.write("astropy    :", astropy.__version__, "@", astropy.__file__)
-st.sidebar.write("astroquery :", astroquery.__version__, "@", astroquery.__file__)
-
-
 rf_model = joblib.load('rf_model.pkl')
 scaler = joblib.load('scaler.pkl')
 
@@ -137,12 +118,14 @@ def get_morph(ra, dec):
     try:
         pos = coords.SkyCoord(ra=ra, dec=dec, unit="deg", frame="icrs")
 
-        # Get r-band science image
+        # Get r-band science image (corrected frame)
         images = SDSS.get_images(coordinates=pos, band='r')
         header = images[0][0].header
         image_data = images[0][0].data
 
-        # WCS transformation
+
+
+        # Reference pixel info from header
         x_ref = header['CRPIX1']
         y_ref = header['CRPIX2']
         ra_ref = header['CRVAL1']
@@ -152,7 +135,7 @@ def get_morph(ra, dec):
         dec_per_col = header['CD2_1']
         dec_per_row = header['CD2_2']
 
-        # Convert target RA/Dec to pixel
+        # Convert RA/DEC to pixel coordinates
         x_target, y_target = compute_x_y_target(
             ra_target=ra, dec_target=dec,
             ra_ref=ra_ref, dec_ref=dec_ref,
@@ -161,64 +144,49 @@ def get_morph(ra, dec):
             dec_per_col=dec_per_col, dec_per_row=dec_per_row
         )
 
-        # Trim image
-        image_data = remove_distant_pixels(image_data, x_target, y_target)
+        # Trim image around target galaxy
+        image_data = remove_distant_pixels(
+            image_data=image_data,
+            x_target=x_target,
+            y_target=y_target
+        )
 
-        # Estimate and subtract background using edge pixels
-        edge_mask = np.ones_like(image_data, dtype=bool)
-        edge_mask[20:-20, 20:-20] = False
-        background_value = np.median(image_data[edge_mask])
-        image_data -= background_value
-
-        # Clean and clip image
-        image_data = image_data.astype('float64')
-        image_data = np.nan_to_num(image_data, nan=0.0, posinf=0.0, neginf=0.0)
-        image_data = np.clip(image_data, 0, np.percentile(image_data, 99.9))
-
-        # Create PSF
+        # Create synthetic PSF
         psf = create_gaussian_psf(size=25, fwhm=3, magnitude=18.5)
-        psf = np.nan_to_num(psf, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Thresholding and segmentation
+        # Ensure float format for convolution
+        image_data = image_data.astype('float64')
         threshold = detect_threshold(image_data, nsigma=3)
         convolved_image = convolve(image_data, psf)
+
+        # Detect sources and create segmentation map
         segmap = detect_sources(convolved_image, threshold, npixels=4)
-
-        # Filter small segments
-        min_pixels = 20
-        segmap.segments = [seg for seg in segmap.segments if seg.data.sum() >= min_pixels]
         if not segmap.segments:
-            return "No usable segments after filtering small ones"
+            return "No sources detected"
 
-        # Select largest segment
+        # Select largest object by size
         object_sizes = [seg.data.size for seg in segmap.segments]
         largest_index = int(np.argmax(object_sizes))
 
-        # Gain from CAMCOL
+        # Infer gain from filename
         gain_map = [4.71, 4.6, 4.72, 4.76, 4.725, 4.895]
-        camcol = header.get('CAMCOL')
-        if not camcol or not (1 <= camcol <= 6):
-            return "Invalid or missing CAMCOL"
-        gain = gain_map[camcol - 1]
 
-        # Build mask for background
-        mask = (image_data == 0.0)
-
-        # Morphology
+        # Run statmorph
         morph_list = statmorph.source_morphology(
-            image_data, segmap, gain=gain, psf=psf, mask=mask
+            image_data, segmap, gain=gain_map[header['CAMCOL']-1], psf=psf
         )
-        target_morph = morph_list[largest_index]
 
-        return target_morph  # return regardless of flag to allow fallback logic later
+        target_morph = morph_list[largest_index]
+        if target_morph.flag == 0:
+            return target_morph
+        else:
+            return f"Bad fit for object! Flag = {target_morph.flag}"
 
     except FileNotFoundError:
         return f"Object Not Found"
     except Exception as e:
         return f"Error processing: {e}"
-
-
-
+    
     
 
 def eaProbability(
@@ -332,6 +300,36 @@ def eaProbability(
     except Exception as e:
         return f"Prediction error: {e}"
 
+def get_and_plot_spectrum(ra, dec):
+    from astroquery.sdss import SDSS
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+
+    pos = SkyCoord(ra=ra*u.deg, dec=dec*u.deg, frame='icrs')
+
+    try:
+        xid = SDSS.query_region(pos, radius=2*u.arcsec, spectro=True)
+        if xid is None or len(xid) == 0:
+            return "No spectra found near this position"
+
+        # Find nearest spectrum
+        sp = SDSS.get_spectra(matches=xid[:1])[0]
+        spec_data = sp[1].data
+        flux = spec_data['flux']
+        loglam = spec_data['loglam']
+        wavelength = 10**loglam
+
+        # Plot the spectrum
+        fig, ax = plt.subplots()
+        ax.plot(wavelength, flux, color='black', lw=0.5)
+        ax.set_xlabel("Wavelength (Å)")
+        ax.set_ylabel("Flux")
+        ax.set_title("SDSS Spectrum")
+        ax.set_xlim(wavelength[0], wavelength[-1])
+        return fig
+
+    except Exception as e:
+        return f"Error retrieving spectrum: {e}"
 
 
 
@@ -339,8 +337,9 @@ def eaProbability(
 st.title("E+A Galaxy Classifier")
 
 # User input
-ra = st.number_input("Right Ascension (RA)", value=180.0)
-dec = st.number_input("Declination (DEC)", value=0.0)
+ra = st.number_input("Right Ascension (RA)", value=180.0, format="%.6f")
+dec = st.number_input("Declination (DEC)", value=0.0, format="%.6f")
+
 
 # Run analysis
 if st.button("Analyze Galaxy"):
@@ -351,14 +350,37 @@ if st.button("Analyze Galaxy"):
             st.error(morph)
         else:
             # Display E+A probability
-            prob = eaProbability(ra=ra,dec=dec,morph=morph,scaler=scaler,return_numpy=True)
-            prob_scalar = prob[0, -1]  # Last element in the 1x13 array
-            st.success(f"E+A Probability: {prob_scalar:.2f}")       
+            with st.spinner("Calculating E+A probability..."):
+                prob = eaProbability(ra=ra, dec=dec, morph=morph, scaler=scaler, return_numpy=True)
+
+            prob_scalar = prob[0, -1]
+            st.success(f"E+A Probability: {prob_scalar}")
+     
 
 
             # Display morphology figure
             fig = make_figure(morph)
             st.pyplot(fig)
 
+            #Display spectrum if available
+            with st.spinner("Retrieving SDSS spectra..."):
+                spectrum_fig = get_and_plot_spectrum(ra, dec)
+
+            if isinstance(spectrum_fig, str):
+                st.warning(spectrum_fig)
+            else:
+                st.pyplot(spectrum_fig)
+
+
     except Exception as e:
         st.error(f"An error occurred: {e}")
+
+st.markdown("---")
+st.markdown(
+    "<div style='text-align: center; font-size: 0.9em;'>"
+    "Made by Jacob Yuzovitskiy. Contact: "
+    "<a href='mailto:jacob.yuzovitskiy@macaulay.cuny.edu'>jacob.yuzovitskiy@macaulay.cuny.edu</a>"
+    "</div>",
+    unsafe_allow_html=True
+)
+
