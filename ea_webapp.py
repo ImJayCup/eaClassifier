@@ -375,6 +375,57 @@ if st.button("Analyze Galaxy"):
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
+# new stuff begins
+
+st.header("Batch Analysis")
+
+uploaded_file = st.file_uploader("Upload CSV with 'RA' and 'DEC' columns", type=['csv'])
+
+if uploaded_file is not None:
+    try:
+        df_coords = pd.read_csv(uploaded_file)
+        if 'RA' not in df_coords.columns or 'DEC' not in df_coords.columns:
+            st.error("CSV must contain 'RA' and 'DEC' columns.")
+        else:
+            batch_results = []
+            total = len(df_coords)
+
+            with st.spinner(f"Processing {total} coordinates..."):
+                for i, row in df_coords.iterrows():
+                    ra_val = row['RA']
+                    dec_val = row['DEC']
+                    st.write(f"🔍 Processing {i+1}/{total}: RA={ra_val}, DEC={dec_val}")
+
+                    morph = get_morph(ra_val, dec_val)
+                    if isinstance(morph, str):
+                        result = {"RA": ra_val, "DEC": dec_val, "Error": morph}
+                    else:
+                        prob_df = eaProbability(ra_val, dec_val, morph, scaler)
+                        if isinstance(prob_df, str):
+                            result = {"RA": ra_val, "DEC": dec_val, "Error": prob_df}
+                        else:
+                            result = prob_df.iloc[0].to_dict()  # Get the single-row DataFrame as a dict
+
+                    batch_results.append(result)
+
+            results_df = pd.DataFrame(batch_results)
+
+            st.success("Batch processing complete!")
+            st.dataframe(results_df)
+
+            # Download button
+            csv = results_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Results as CSV",
+                data=csv,
+                file_name="ea_predictions_batch.csv",
+                mime='text/csv',
+            )
+
+    except Exception as e:
+        st.error(f"An error occurred while processing the file: {e}")
+# new stuff ends
+
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; font-size: 0.9em;'>"
