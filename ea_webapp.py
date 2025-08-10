@@ -375,7 +375,9 @@ if st.button("Analyze Galaxy"):
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
-# new stuff begins
+# ========================= new stuff begins (simpler Excel with images) =========================
+import io, os, tempfile
+from pathlib import Path
 
 st.header("Batch Analysis")
 
@@ -390,21 +392,59 @@ if uploaded_file is not None:
             batch_results = []
             total = len(df_coords)
 
+            # temp folder for all per-run PNGs
+            workdir = Path(tempfile.mkdtemp(prefix="ea_batch_"))
+            spec_dir = workdir / "spectra"
+            morph_dir = workdir / "morph"
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            morph_dir.mkdir(parents=True, exist_ok=True)
+
             with st.spinner(f"Processing {total} coordinates..."):
                 for i, row in df_coords.iterrows():
-                    ra_val = row['RA']
-                    dec_val = row['DEC']
+                    ra_val = float(row['RA'])
+                    dec_val = float(row['DEC'])
                     st.write(f"🔍 Processing {i+1}/{total}: RA={ra_val}, DEC={dec_val}")
 
+                    # Run your morphology
                     morph = get_morph(ra_val, dec_val)
+
+                    # Prepare a result row (start with RA/DEC)
                     if isinstance(morph, str):
                         result = {"RA": ra_val, "DEC": dec_val, "Error": morph}
+                        morph_fig_path = ""
                     else:
+                        # Model prediction (your function already returns a one-row DF)
                         prob_df = eaProbability(ra_val, dec_val, morph, scaler)
                         if isinstance(prob_df, str):
                             result = {"RA": ra_val, "DEC": dec_val, "Error": prob_df}
                         else:
-                            result = prob_df.iloc[0].to_dict()  # Get the single-row DataFrame as a dict
+                            result = prob_df.iloc[0].to_dict()
+                            result["RA"] = ra_val
+                            result["DEC"] = dec_val
+                            # Save statmorph figure -> PNG
+                            try:
+                                fig_m = make_figure(morph)
+                                morph_fig_path = str(morph_dir / f"statmorph_{i}.png")
+                                fig_m.savefig(morph_fig_path, dpi=150, bbox_inches="tight")
+                                plt.close(fig_m)
+                            except Exception:
+                                morph_fig_path = ""
+
+                    # Try to render + save SDSS spectrum PNG (best-effort)
+                    try:
+                        spec_fig = get_and_plot_spectrum(ra_val, dec_val)
+                        if hasattr(spec_fig, "savefig"):
+                            spec_fig_path = str(spec_dir / f"spectrum_{i}.png")
+                            spec_fig.savefig(spec_fig_path, dpi=150, bbox_inches="tight")
+                            plt.close(spec_fig)
+                        else:
+                            spec_fig_path = ""
+                    except Exception:
+                        spec_fig_path = ""
+
+                    # Attach image paths (used for embedding in Excel)
+                    result["SDSS_spectrum_img"] = spec_fig_path
+                    result["statmorph_img"]     = morph_fig_path
 
                     batch_results.append(result)
 
@@ -413,18 +453,52 @@ if uploaded_file is not None:
             st.success("Batch processing complete!")
             st.dataframe(results_df)
 
-            # Download button
-            csv = results_df.to_csv(index=False).encode('utf-8')
+            # -------- Write Excel with embedded thumbnails --------
+            import xlsxwriter
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                sheet = "results"
+                results_df.to_excel(writer, sheet_name=sheet, index=False)
+
+                wb = writer.book
+                ws = writer.sheets[sheet]
+
+                # widen columns and set row heights for small thumbs
+                for c, name in enumerate(results_df.columns):
+                    ws.set_column(c, c, max(14, min(40, len(str(name)) + 2)))
+                row_height = 120  # px
+                img_scale = 0.5   # downscale images to fit
+                for r in range(len(results_df)):
+                    ws.set_row(r + 1, row_height)  # +1 for header
+
+                # figure out the two image columns
+                col_spec  = results_df.columns.get_loc("SDSS_spectrum_img")
+                col_morph = results_df.columns.get_loc("statmorph_img")
+
+                for r in range(len(results_df)):
+                    # spectrum image
+                    p = results_df.iat[r, col_spec]
+                    if isinstance(p, str) and p and os.path.exists(p):
+                        ws.insert_image(r + 1, col_spec, p, {"x_scale": img_scale, "y_scale": img_scale, "object_position": 1})
+                    # statmorph image
+                    p = results_df.iat[r, col_morph]
+                    if isinstance(p, str) and p and os.path.exists(p):
+                        ws.insert_image(r + 1, col_morph, p, {"x_scale": img_scale, "y_scale": img_scale, "object_position": 1})
+
+            xlsx_bytes = output.getvalue()
             st.download_button(
-                label="📥 Download Results as CSV",
-                data=csv,
-                file_name="ea_predictions_batch.csv",
-                mime='text/csv',
+                label="📥 Download Results as Excel (.xlsx) with images",
+                data=xlsx_bytes,
+                file_name="ea_predictions_batch_with_images.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+            # ------------------------------------------------------
 
     except Exception as e:
         st.error(f"An error occurred while processing the file: {e}")
-# new stuff ends
+# ========================= new stuff ends =========================
+
 
 st.markdown("---")
 st.markdown(
