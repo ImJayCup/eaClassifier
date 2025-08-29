@@ -337,8 +337,8 @@ def get_and_plot_spectrum(ra, dec):
 st.title("E+A Galaxy Classifier")
 
 # User input
-ra = st.number_input("Right Ascension (RA)", value=180.0, format="%.5f")
-dec = st.number_input("Declination (DEC)", value=0.0, format="%.5f")
+ra = st.number_input("Right Ascension (RA)", value=229.52558, format="%.5f")
+dec = st.number_input("Declination (DEC)", value=42.74585, format="%.5f")
 
 
 # Run analysis
