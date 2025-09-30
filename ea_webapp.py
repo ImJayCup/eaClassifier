@@ -132,6 +132,28 @@ def plot_psf(psf):
     plt.show()
 
 def get_morph(ra, dec):
+    """    
+        Get statmorph morphology for a given galaxy with input RA,DEC.
+        
+        (1) Uses astroquery.SDSS to pull image file - saves data to image_data.
+        (2) Pulls information from WCS header for later use in locating target object
+        (3) Converts input ra,dec to pixel coordinates
+        (4) Creates image cutout on image_data centered on x_target, y_target
+        (5)* Creates synthetic Gaussian PSF, Convolves with original image
+        (6) Detect sources in the image cutout and create segment map (needed for statmorph)
+        (7)** Select largest segment as target object
+        (8) Get gain from header data (needed for statmorph)
+        (9) Run statmorph
+    
+        *The use of synthetic Gaussian PSF instead of an inferred PSF calculated from the image data
+        is a simplification for the purposes of runtime - the efficacy of the model despite this 
+        rudimentary method is mostly attributed to luck.
+
+        **Though I have not tested this statistically, choosing the largest segment in the image cutout
+        as the target object seems to work most of the time and saves some headache - using the pixel position
+        of the target may seem more intuitive, but ends up leading to some wacky errors when the segmap is non-trivial.
+    """
+
     try:
         pos = coords.SkyCoord(ra=ra, dec=dec, unit="deg", frame="icrs")
 
@@ -216,7 +238,10 @@ def eaProbability(
     return_numpy=False
 ):
     """
-    Predict E+A probability for a galaxy using morphology + ugriz mags from SDSS.
+    Predict E+A probability for a galaxy using morphology + ugriz mags from SDSS. Allows input
+    as a single ra,dec pair or a CSV containing ra,dec pairs. Returns as a csv.
+
+
     """
     from astroquery.sdss import SDSS
     from astropy.coordinates import SkyCoord
@@ -525,4 +550,3 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
-
