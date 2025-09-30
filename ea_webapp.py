@@ -33,12 +33,23 @@ import pandas as pd
 
 import joblib
 
+#       Load the model and scaler. The current model and scaler are obtained 
+#       by running morphology on 719 known E+A from Goto (2007) selected based on redshift
+#       0.0013 < z < 0.033. The exact galaxies used to train the model are available at []
+#       by sorting by redshift and taking the top 719 entries.
+
+
 rf_model = joblib.load('rf_model.pkl')
 scaler = joblib.load('scaler.pkl')
 
 
 def compute_x_y_target(ra_target, dec_target, ra_ref, dec_ref, x_ref, y_ref, 
                         ra_per_col, ra_per_row, dec_per_col, dec_per_row):
+
+#       Computes the (x,y) index of a 2D array closest to the RA,DEC input.
+#       Serves the same purpose as WCS coordinate headers, but allows for more flexibility
+#       for troubleshooting.
+
     # Compute del_ra and del_dec
     del_ra = ra_target - ra_ref
     del_dec = dec_target - dec_ref
@@ -59,6 +70,11 @@ def compute_x_y_target(ra_target, dec_target, ra_ref, dec_ref, x_ref, y_ref,
 
 
 def remove_distant_pixels(image_data, x_target, y_target, max_distance=100):
+
+#       Reshapes target 2D array into an NxN square centered on x_target, y_target.
+#       Existing checks for masked pixels - meaning a 200x200 array of empty space will
+#       return an error.
+
     height, width = image_data.shape[:2]
     y_indices, x_indices = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
     dist_sq = (x_indices - x_target) ** 2 + (y_indices - y_target) ** 2
@@ -85,11 +101,12 @@ def remove_distant_pixels(image_data, x_target, y_target, max_distance=100):
 
 
 def magnitude_to_flux(mag, zero_point=25.0):
-    """Convert magnitude to flux assuming a zero-point magnitude."""
+#       Convert magnitude to flux assuming a zero-point magnitude.
     return 10**((zero_point - mag) / 2.5)
 
 def create_gaussian_psf(size=25, fwhm=3, magnitude=18.23993, zero_point=25.0):
-    """Generate a Gaussian PSF with a given magnitude."""
+#       Generate a Gaussian PSF with a given magnitude.
+
     sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))  # Convert FWHM to standard deviation
     x, y = np.meshgrid(np.arange(size), np.arange(size))
     x0, y0 = size // 2, size // 2  # Center of the PSF
@@ -107,7 +124,7 @@ def create_gaussian_psf(size=25, fwhm=3, magnitude=18.23993, zero_point=25.0):
     return psf
 
 def plot_psf(psf):
-    """Plot the PSF."""
+#       Plot the PSF. Currently unused.
     norm = simple_norm(psf, 'log')
     plt.imshow(psf, norm=norm, origin='lower', cmap='inferno')
     plt.colorbar(label='Flux')
