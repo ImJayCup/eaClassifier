@@ -261,7 +261,8 @@ def eaProbability(
                 'modelMag_i', 'modelMag_z',
                 'type'
             ],
-            spectro=False
+            spectro=False,
+            data_release=9
         )
 
         # DEBUG: Log SDSS query result
