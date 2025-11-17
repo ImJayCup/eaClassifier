@@ -395,6 +395,25 @@ if st.button("Analyze Galaxy"):
             with st.spinner("Calculating E+A probability..."):
                 prob = eaProbability(ra=ra, dec=dec, morph=morph, scaler=scaler, return_numpy=True)
 
+            if isinstance(prob, str):
+              st.error(prob)
+            else:
+              prob_scalar = prob.iloc[0, -1]  # Use iloc for DataFrame
+              st.success(f"E+A Probability: {prob_scalar:.4f}")
+        
+              # Display morphology figure
+              fig = make_figure(morph)
+              st.pyplot(fig)
+              
+              # Display spectrum if available
+              with st.spinner("Retrieving SDSS spectra..."):
+                  spectrum_fig = get_and_plot_spectrum(ra, dec)
+              
+              if isinstance(spectrum_fig, str):
+                  st.warning(spectrum_fig)
+              else:
+                  st.pyplot(spectrum_fig)
+
             prob_scalar = prob[0, -1]
             st.success(f"E+A Probability: {prob_scalar}")
      
@@ -455,7 +474,7 @@ if uploaded_file is not None:
                         result = {"RA": ra_val, "DEC": dec_val, "Error": morph}
                         morph_fig_path = ""
                     else:
-                        # Model prediction (your function already returns a one-row DF)
+                        # Model prediction
                         prob_df = eaProbability(ra_val, dec_val, morph, scaler)
                         if isinstance(prob_df, str):
                             result = {"RA": ra_val, "DEC": dec_val, "Error": prob_df}
