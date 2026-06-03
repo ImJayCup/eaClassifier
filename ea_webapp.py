@@ -399,7 +399,7 @@ if st.button("Analyze Galaxy"):
             if isinstance(prob, str):
               st.error(prob)
             else:
-              prob_scalar = prob.iloc[0, -1]  # Use iloc for DataFrame
+              prob_scalar = prob[0, -1]  # w/o iloc
               st.success(f"E+A Probability: {prob_scalar:.4f}")
         
               # Display morphology figure
@@ -480,7 +480,7 @@ if uploaded_file is not None:
                         if isinstance(prob_df, str):
                             result = {"RA": ra_val, "DEC": dec_val, "Error": prob_df}
                         else:
-                            result = prob_df.iloc[0].to_dict()
+                            result = prob_df[0].to_dict() #w/0 iloc
                             result["RA"] = ra_val
                             result["DEC"] = dec_val
                             # Save statmorph figure -> PNG
